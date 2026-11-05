@@ -18,7 +18,22 @@ Written after the audit below. Line numbers and "never run" claims in the sectio
 | A-11 | CLOSED | CI found `ink@7.1.0` needs Node ≥22; `engines`, `tsup` target, README and CI matrix now say 22 |
 | A-14 | CLOSED, behavior [HYPOTHESIS] | `SILENCE_LIMIT_MS` `ytdlp.ts:272` per phase (`preparing` 2 min, `downloading` 90 s, `processing` none); not exercised against a real dead connection |
 
-Still open: A-01, A-03, A-04, A-05, A-06, A-13, A-15, D-04. Still unexercised: stall watchdog on a dead connection, tampered-checksum rejection, the 7-day `-U` update.
+### Second update (scriptable mode, playlists, split)
+
+| ID | Now | Evidence |
+|---|---|---|
+| A-01 | CLOSED | `app.tsx` 301 lines (was 522); workflow in `lib/use-yoink-flow.ts` (169), views in `components/download-view.tsx`, `choice-list.tsx`, `gap.tsx`. Driven end to end with a fake TTY and real yt-dlp: probe → picker → download → done → input |
+| A-03 | PARTLY CLOSED | `activeChild` is now a `Set` (`activeChildren`); `frameLines` (click-map) and cli `outcome` stay module-level, single-use |
+| A-04 | MITIGATED | `info-files.ts` `sweepStaleInfoFiles` removes `yoinks-info-*.json` older than 24 h at each probe; a SIGKILL leak now lasts at most a day. Tested |
+| A-05 | CLOSED | `theme-mode.ts` holds the guard; `args.ts` no longer imports `theme.ts` |
+| A-06 | CLOSED | `parseArgs` rejects a non-http(s) url; tested |
+| A-09 | PARTLY CLOSED | `spawn` is stubbed in tests (`ytdlp-stall`, `headless`, `provision-update`); `fetch` stubbed in `provision-fetch`. `probe` still has no test. 35 tests |
+| A-13 | MITIGATED | `YOINKS_DEBUG=1` logs argv, exit code and full stderr to `~/.yoinks/debug.log` (`debug.ts`, tested) |
+| A-14 | CLOSED, tested | the `processing` phase never trips the watchdog (test), the downloading phase does (test) |
+| D-04 | VERIFIED | `ink-select-input` `SelectInput.js` handles `j`/`k` and keys 1–9 |
+| Roadmap | DONE | `--best`, `--mp3`, `--playlist`, `-o/--output`, `install.sh`. Interactive playlist picker is NOT built: a playlist link shows a message pointing at `--playlist` |
+
+Still open: A-15 (same-release checksum; stronger verification not attempted), the interactive playlist picker, `probe` without a test, and no live run of the `-U` updater against GitHub (its call logic is tested with a stubbed spawn).
 
 ---
 
