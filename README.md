@@ -26,6 +26,16 @@ Or try it without installing anything:
 npx yoinks
 ```
 
+On macOS and Linux you can also install straight from this repo:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/georgehadji/Downloader/main/install.sh | sh
+```
+
+It clones to `~/.yoinks/app`, builds, and links `~/.local/bin/yoinks`. Run it
+again to update. On Windows, use the development steps below
+(`npm install`, `npm run build`, `npm link`).
+
 Requires Node 22+. Everything else (yt-dlp, ffmpeg) is fetched or bundled
 automatically.
 
@@ -35,7 +45,28 @@ automatically.
 $ yoinks https://youtu.be/dQw4w9WgXcQ    # straight to the format picker
 $ yoinks                                 # prompts for a url
 $ yoinks --theme light                   # force the light palette
+$ yoinks -o ~/Videos <url>               # save somewhere other than ~/Downloads
 ```
+
+### Scriptable mode
+
+`--best` and `--mp3` skip the picker, download, print the saved file path to
+stdout (progress and messages go to stderr) and exit. The exit code is `0` on
+success and `1` on any failure.
+
+```sh
+$ yoinks --best https://youtu.be/dQw4w9WgXcQ            # best quality, mp4
+$ yoinks --mp3 -o ~/Music https://youtu.be/dQw4w9WgXcQ  # audio only
+$ file=$(yoinks --best <url>)                           # capture the path
+$ yoinks --mp3 --playlist <playlist-url>                # every video, one path per line
+```
+
+With `--playlist`, videos that fail (private, removed) are skipped; the rest
+are saved and yoinks exits `1` with the reason on stderr. In the interactive
+app a playlist link shows a message pointing you to `--playlist`.
+
+Something failing with too little detail? `YOINKS_DEBUG=1 yoinks …` appends
+yt-dlp's command line and full output to `~/.yoinks/debug.log`.
 
 yoinks takes over the terminal (full-screen, centered — and restores your
 scrollback on exit). Pick a format with ↑/↓ (or j/k, or number keys) and
@@ -78,13 +109,14 @@ To try it as a global command without publishing: `npm link`, then run
 
 ## Roadmap
 
-- [ ] `--best` / `--mp3` flags to skip the picker (scriptable mode)
-- [ ] `-o <dir>` to choose the output folder
-- [ ] Playlist / thread-with-multiple-videos support
+- [x] `--best` / `--mp3` flags to skip the picker (scriptable mode)
+- [x] `-o <dir>` to choose the output folder
+- [x] Playlist support in scriptable mode (`--playlist`)
+- [ ] Playlist picker in the interactive app
 - [x] Clipboard detection: launch bare and auto-suggest the url you copied
 - [x] Self-update for the bundled yt-dlp binary (`yt-dlp -U`)
 - [x] Publish to npm (`npm i -g yoinks` / `npx yoinks`)
-- [ ] `curl yoinks.sh | sh` installer
+- [x] `curl … | sh` installer (macOS/Linux; `install.sh`)
 
 ## A note on fair use
 

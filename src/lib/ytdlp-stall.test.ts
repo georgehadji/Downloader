@@ -10,11 +10,18 @@ import test from 'node:test'
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yoinks-stall-'))
 const fake = path.join(dir, 'fake-ytdlp.cjs')
 const pidFile = path.join(dir, 'pid.txt')
+// STALL_MODE=ffmpeg: goes quiet inside the processing phase, then finishes normally
 fs.writeFileSync(
   fake,
-  `console.log('[download] Destination: ' + require('path').join(${JSON.stringify(dir)}, 'x.mp4'))\n` +
+  `const p = require('path')\n` +
     `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))\n` +
-    `setInterval(() => {}, 1000)\n`,
+    `if (process.env.STALL_MODE === 'ffmpeg') {\n` +
+    `  console.log('[Merger] Merging formats into "x.mp4"')\n` +
+    `  setTimeout(() => { console.log(p.join(${JSON.stringify(dir)}, 'x.mp4')); process.exit(0) }, 1200)\n` +
+    `} else {\n` +
+    `  console.log('[download] Destination: ' + p.join(${JSON.stringify(dir)}, 'x.mp4'))\n` +
+    `  setInterval(() => {}, 1000)\n` +
+    `}\n`,
 )
 
 // download() spawns through the module binding, so swap it before importing
@@ -33,5 +40,16 @@ test('download kills a silent child and reports a stall, keeping the run resumab
   )
   const pid = Number(fs.readFileSync(pidFile, 'utf8'))
   assert.throws(() => process.kill(pid, 0), 'child should be dead')
+})
+
+test('download never calls silence during post-processing, however long ffmpeg is quiet', async () => {
+  process.env.STALL_MODE = 'ffmpeg'
+  // 4x the limit of silence while processing — a downloading-phase child would be killed
+  const file = await download(
+    {ytdlp: 'unused', url: 'https://example.test/v', choice: {args: []} as never, outDir: dir, silenceLimitMs: 300},
+    {onProgress() {}, onProcessing() {}},
+  )
+  assert.equal(file, path.join(dir, 'x.mp4'))
+  delete process.env.STALL_MODE
   fs.rmSync(dir, {recursive: true, force: true})
 })

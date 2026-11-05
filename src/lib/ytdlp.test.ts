@@ -90,7 +90,8 @@ test('parseDownloadLine: destinations, processing and the final path', () => {
   assert.deepEqual(parseDownloadLine(state, '[ExtractAudio] Destination: /tmp/a.mp3'), {kind: 'processing'})
   assert.deepEqual(state.destinations, ['/tmp/a.f137.mp4', '/tmp/a.mp4', '/tmp/a.mp3'])
   assert.equal(parseDownloadLine(state, ''), undefined)
-  assert.equal(parseDownloadLine(state, abs), undefined)
+  assert.deepEqual(parseDownloadLine(state, abs), {kind: 'file', filepath: abs})
+  assert.deepEqual(state.filepaths, [abs])
   assert.equal(state.filepath, abs)
 })
 

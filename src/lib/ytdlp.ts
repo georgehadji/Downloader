@@ -1,14 +1,16 @@
 import {spawn, type ChildProcess} from 'node:child_process'
-import {rmSync} from 'node:fs'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import {debug} from './debug.js'
 import {formatBytes} from './format.js'
+import {saveInfoJson, sweepStaleInfoFiles} from './info-files.js'
 import {withTimeout} from './timeout.js'
 
 const PROBE_TIMEOUT_MS = 2 * 60 * 1000
 
 export type VideoInfo = {
+  /** 'playlist' when the link names a whole list rather than one video. */
+  _type?: string
   title: string
   uploader?: string
   duration?: number
@@ -42,36 +44,18 @@ export type ProbeResult = {
  * non-ASCII titles come back as a path that doesn't exist.
  */
 function spawnYtDlp(ytdlp: string, args: string[], signal?: AbortSignal): ChildProcess {
+  debug(`spawn ${ytdlp} ${args.join(' ')}`)
   const child = spawn(ytdlp, ['--encoding', 'utf-8', ...args], {signal})
   child.stdout?.setEncoding('utf8')
   child.stderr?.setEncoding('utf8')
   return child
 }
 
-// info files this run wrote; the exit handler is the backstop for paths that
-// never reach discardInfoJson (ctrl-c, crash)
-const infoFiles = new Set<string>()
-process.on('exit', () => {
-  for (const file of infoFiles) {
-    try {
-      rmSync(file, {force: true})
-    } catch {
-      // EBUSY on Windows must not turn into an exit-time crash
-    }
-  }
-})
-
-export function discardInfoJson(file: string): Promise<void> {
-  return fs.rm(file, {force: true}).then(
-    () => void infoFiles.delete(file),
-    () => {},
-  )
-}
-
 export async function probe(ytdlp: string, url: string, signal?: AbortSignal): Promise<ProbeResult> {
+  void sweepStaleInfoFiles()
   const limit = withTimeout(PROBE_TIMEOUT_MS, signal)
   const stdout = await new Promise<string>((resolve, reject) => {
-    const child = spawnYtDlp(ytdlp, ['-J', '--no-playlist', '--no-warnings', url], limit.signal)
+    const child = spawnYtDlp(ytdlp, ['-J', '--no-playlist', '--flat-playlist', '--no-warnings', url], limit.signal)
     let out = ''
     let stderr = ''
     child.stdout!.on('data', (chunk: string) => (out += chunk))
@@ -80,6 +64,7 @@ export async function probe(ytdlp: string, url: string, signal?: AbortSignal): P
       reject(limit.timedOut ? new Error('Timed out reading the video info. Check the link and your connection.') : error),
     )
     child.on('close', code => {
+      debug(`probe exit ${code}\n${stderr}`)
       if (code !== 0) {
         reject(new Error(cleanYtDlpError(stderr) || `yt-dlp exited with code ${code}`))
       } else {
@@ -95,11 +80,7 @@ export async function probe(ytdlp: string, url: string, signal?: AbortSignal): P
     throw new Error('Could not parse video info from yt-dlp.')
   }
 
-  const infoJsonPath = path.join(os.tmpdir(), `yoinks-info-${process.pid}-${Date.now()}.json`)
-  infoFiles.add(infoJsonPath)
-  // 0600: the info holds signed media urls, no reason for other users to read it
-  await fs.writeFile(infoJsonPath, stdout, {mode: 0o600})
-  return {info, infoJsonPath}
+  return {info, infoJsonPath: await saveInfoJson(stdout)}
 }
 
 export type DownloadChoice = {
@@ -109,6 +90,18 @@ export type DownloadChoice = {
 }
 
 const MAX_VIDEO_CHOICES = 8
+
+/** What `--best` downloads: the highest quality, merged to mp4. Needs no probe. */
+export const BEST_CHOICE: DownloadChoice = {
+  kind: 'video',
+  label: 'best available · mp4',
+  args: ['-f', 'bv*+ba/b', '--merge-output-format', 'mp4'],
+}
+
+const MP3_ARGS = ['-f', 'ba/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0']
+
+/** What `--mp3` downloads. */
+export const MP3_CHOICE: DownloadChoice = {kind: 'audio', label: 'audio only · mp3', args: MP3_ARGS}
 
 export function buildChoices(info: VideoInfo): DownloadChoice[] {
   const formats = info.formats ?? []
@@ -139,20 +132,10 @@ export function buildChoices(info: VideoInfo): DownloadChoice[] {
     })
   }
 
-  if (choices.length === 0) {
-    choices.push({
-      kind: 'video',
-      label: 'best available · mp4',
-      args: ['-f', 'bv*+ba/b', '--merge-output-format', 'mp4'],
-    })
-  }
+  if (choices.length === 0) choices.push(BEST_CHOICE)
 
   const audioSizeLabel = audioSize ? ` · ~${formatBytes(audioSize)}` : ''
-  choices.push({
-    kind: 'audio',
-    label: `audio only · mp3${audioSizeLabel}`,
-    args: ['-f', 'ba/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0'],
-  })
+  choices.push({...MP3_CHOICE, label: `audio only · mp3${audioSizeLabel}`})
 
   return choices
 }
@@ -177,6 +160,10 @@ export type DownloadProgress = {
 export type DownloadHandlers = {
   onProgress: (progress: DownloadProgress) => void
   onProcessing: () => void
+  /** Called with each finished file — a playlist run yields many. */
+  onFile?: (filepath: string) => void
+  /** A playlist run finished with some videos failed; the others still landed. */
+  onWarning?: (message: string) => void
 }
 
 // title + id + height: two videos with the same title (or one video in two
@@ -201,8 +188,10 @@ export type ParseState = {
   /** How many files this run resolves to (video+audio merges are 2). */
   totalParts: number
   lastDownloaded: number
-  /** Final path, from `--print after_move:filepath`. */
+  /** Last final path, from `--print after_move:filepath`. */
   filepath: string
+  /** Every final path so far — a playlist run prints one per video. */
+  filepaths: string[]
   /** Every file yt-dlp writes this run, so a cancel can clean up after itself. */
   destinations: string[]
 }
@@ -213,10 +202,15 @@ export const newParseState = (): ParseState => ({
   totalParts: 1,
   lastDownloaded: 0,
   filepath: '',
+  filepaths: [],
   destinations: [],
 })
 
-export type LineEvent = {kind: 'progress'; progress: DownloadProgress} | {kind: 'processing'} | undefined
+export type LineEvent =
+  | {kind: 'progress'; progress: DownloadProgress}
+  | {kind: 'processing'}
+  | {kind: 'file'; filepath: string}
+  | undefined
 
 /** Interpret one stdout line of a download run. Updates `state` in place; returns what the UI should hear about. */
 export function parseDownloadLine(state: ParseState, rawLine: string): LineEvent {
@@ -259,6 +253,8 @@ export function parseDownloadLine(state: ParseState, rawLine: string): LineEvent
     state.phase = 'processing'
   } else if (path.isAbsolute(line)) {
     state.filepath = line
+    state.filepaths.push(line)
+    return {kind: 'file', filepath: line}
   }
   return undefined
 }
@@ -275,8 +271,10 @@ const SILENCE_LIMIT_MS: Record<RunPhase, number> = {
   processing: Infinity,
 }
 
-let activeChild: ChildProcess | undefined
-process.on('exit', () => activeChild?.kill('SIGTERM'))
+const activeChildren = new Set<ChildProcess>()
+process.on('exit', () => {
+  for (const child of activeChildren) child.kill('SIGTERM')
+})
 
 export function download(
   opts: {
@@ -287,6 +285,8 @@ export function download(
     infoJsonPath?: string
     choice: DownloadChoice
     outDir: string
+    /** Download every video of a playlist link instead of just the one. */
+    playlist?: boolean
     /** Test seam: replaces the 90 s silence limit of the downloading phase. */
     silenceLimitMs?: number
   },
@@ -296,7 +296,7 @@ export function download(
   const args = [
     ...(opts.infoJsonPath ? ['--load-info-json', opts.infoJsonPath] : [opts.url]),
     ...opts.choice.args,
-    '--no-playlist',
+    opts.playlist ? '--yes-playlist' : '--no-playlist',
     '--no-warnings',
     '--newline',
     // --print implies --quiet, which suppresses progress bars and the
@@ -315,7 +315,7 @@ export function download(
 
   return new Promise((resolve, reject) => {
     const child = spawnYtDlp(opts.ytdlp, args, signal)
-    activeChild = child
+    activeChildren.add(child)
 
     const state = newParseState()
     let stderr = ''
@@ -340,6 +340,7 @@ export function download(
         const event = parseDownloadLine(state, line)
         if (event?.kind === 'progress') handlers.onProgress(event.progress)
         else if (event?.kind === 'processing') handlers.onProcessing()
+        else if (event?.kind === 'file') handlers.onFile?.(event.filepath)
       }
     })
     child.stderr!.on('data', (chunk: string) => {
@@ -348,11 +349,13 @@ export function download(
     })
     child.on('error', error => {
       clearInterval(watchdog)
+      activeChildren.delete(child)
       reject(error)
     })
     child.on('close', code => {
       clearInterval(watchdog)
-      activeChild = undefined
+      activeChildren.delete(child)
+      debug(`download exit ${code}\n${stderr}`)
       if (signal?.aborted) {
         // cancelled on purpose — don't leave half-written files behind
         void removePartials(state.destinations)
@@ -364,7 +367,9 @@ export function download(
         reject(new Error(`Download stalled — no data for ${stalledAfterMs / 1000} s. Check your connection and try again.`))
         return
       }
-      if (code === 0 && state.filepath) {
+      // yt-dlp exits 1 when any playlist entry fails; the files that did land still count
+      if (state.filepath && (code === 0 || opts.playlist)) {
+        if (code !== 0) handlers.onWarning?.(cleanYtDlpError(stderr) || `some videos failed (yt-dlp exit code ${code})`)
         resolve(state.filepath)
       } else {
         reject(new Error(cleanYtDlpError(stderr) || `Download failed (yt-dlp exit code ${code}).`))
