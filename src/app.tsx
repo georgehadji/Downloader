@@ -15,6 +15,7 @@ import {clickTargetAt, findFrameRow, frameRowSpan, type ClickTarget} from './lib
 import {formatBytes, formatDuration, formatSpeed, shortenPath, truncate, wrapText} from './lib/format.js'
 import {addToHistory, loadHistory} from './lib/history.js'
 import {detectPlatform, isProbablyUrl, type Platform} from './lib/platforms.js'
+import {ensureYtDlp, findFfmpeg} from './lib/provision.js'
 import {useClipboardUrl} from './lib/use-clipboard-url.js'
 import {useMouseClick} from './lib/use-mouse-click.js'
 import {nextThemeMode, ThemeProvider, type ThemeMode, useTheme} from './theme.js'
@@ -22,8 +23,6 @@ import {
   buildChoices,
   discardInfoJson,
   download,
-  ensureYtDlp,
-  findFfmpeg,
   isExpiredLinkError,
   probe,
   type DownloadChoice,

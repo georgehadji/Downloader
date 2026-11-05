@@ -4,7 +4,6 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   buildChoices,
-  checksumFor,
   isExpiredLinkError,
   newParseState,
   parseDownloadLine,
@@ -67,14 +66,6 @@ test('only 403 and 410 count as an expired link', () => {
   assert.equal(isExpiredLinkError('HTTP Error 403'), false)
 })
 
-test('checksumFor picks the exact asset line and rejects anything else', () => {
-  const sums = `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  yt-dlp_linux_aarch64\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB *yt-dlp_linux\n`
-  assert.equal(checksumFor(sums, 'yt-dlp_linux'), 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-  assert.equal(checksumFor(sums, 'yt-dlp_linux_aarch64'), 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
-  assert.equal(checksumFor(sums, 'yt-dlp.exe'), undefined)
-  assert.equal(checksumFor('nothex  yt-dlp.exe', 'yt-dlp.exe'), undefined)
-})
-
 test('parseDownloadLine: progress lines, with NA fields and the next file resetting the counter', () => {
   const state = newParseState()
   assert.equal(parseDownloadLine(state, '[info] abc: Downloading 1 format(s): 137+140'), undefined)
@@ -101,4 +92,17 @@ test('parseDownloadLine: destinations, processing and the final path', () => {
   assert.equal(parseDownloadLine(state, ''), undefined)
   assert.equal(parseDownloadLine(state, abs), undefined)
   assert.equal(state.filepath, abs)
+})
+
+test('parseDownloadLine tracks the run phase so silence limits fit what yt-dlp is doing', () => {
+  const state = newParseState()
+  assert.equal(state.phase, 'preparing')
+  parseDownloadLine(state, '[download] Destination: /tmp/a.f137.mp4')
+  assert.equal(state.phase, 'downloading')
+  parseDownloadLine(state, '[FixupM3u8] Fixing MPEG-TS in MP4 container')
+  assert.equal(state.phase, 'processing')
+  parseDownloadLine(state, 'YOINK|1|2|NA|NA|NA')
+  assert.equal(state.phase, 'downloading')
+  assert.deepEqual(parseDownloadLine(state, '[Merger] Merging formats into "/tmp/a.mp4"'), {kind: 'processing'})
+  assert.equal(state.phase, 'processing')
 })

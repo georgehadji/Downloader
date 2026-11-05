@@ -1,157 +1,12 @@
 import {spawn, type ChildProcess} from 'node:child_process'
-import {createHash} from 'node:crypto'
-import {createWriteStream, rmSync} from 'node:fs'
+import {rmSync} from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import {Readable} from 'node:stream'
-import {pipeline} from 'node:stream/promises'
 import {formatBytes} from './format.js'
+import {withTimeout} from './timeout.js'
 
-const YOINKS_DIR = path.join(os.homedir(), '.yoinks', 'bin')
-const RELEASE_BASE = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
-
-function ytDlpAssetName(): string {
-  if (process.platform === 'win32') return 'yt-dlp.exe'
-  if (process.platform === 'darwin') return 'yt-dlp_macos'
-  return process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux'
-}
-
-// async on purpose: a spawnSync here blocks the event loop, which freezes
-// ink mid-frame — the user hits enter and sees nothing until it returns
-function commandWorks(cmd: string, args: string[], timeout = 10_000): Promise<boolean> {
-  return new Promise(resolve => {
-    let child
-    try {
-      child = spawn(cmd, args, {stdio: 'ignore', timeout})
-    } catch {
-      resolve(false)
-      return
-    }
-    child.on('error', () => resolve(false))
-    child.on('close', code => resolve(code === 0))
-  })
-}
-
-/** SHA-256 for `asset` from a release `SHA2-256SUMS` file (`<hex>  <name>` per line). */
-export function checksumFor(sums: string, asset: string): string | undefined {
-  for (const line of sums.split('\n')) {
-    const [hash, name] = line.trim().split(/\s+/)
-    if (name?.replace(/^\*/, '') === asset && /^[0-9a-f]{64}$/i.test(hash ?? '')) return hash!.toLowerCase()
-  }
-  return undefined
-}
-
-/**
- * Resolve a usable yt-dlp binary: system install first, then a previously
- * downloaded copy, then download the standalone binary from GitHub releases.
- */
-export async function ensureYtDlp(onStatus: (message: string) => void, signal?: AbortSignal): Promise<string> {
-  if (await commandWorks('yt-dlp', ['--version'])) return 'yt-dlp'
-
-  const local = path.join(YOINKS_DIR, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp')
-  if (await commandWorks(local, ['--version'])) {
-    await updateIfStale(local, onStatus)
-    return local
-  }
-
-  onStatus('first run: fetching yt-dlp…')
-  await fs.mkdir(YOINKS_DIR, {recursive: true})
-
-  const asset = ytDlpAssetName()
-  const tmp = `${local}.download`
-  const limit = withTimeout(FETCH_TIMEOUT_MS, signal)
-  try {
-    // checksums first: fail before downloading ~18 MB we could not verify
-    const sumsResponse = await fetch(`${RELEASE_BASE}/SHA2-256SUMS`, {signal: limit.signal})
-    if (!sumsResponse.ok) {
-      throw new Error(`Could not verify yt-dlp (${sumsResponse.status}). Check your connection and try again.`)
-    }
-    const expected = checksumFor(await sumsResponse.text(), asset)
-
-    const response = await fetch(`${RELEASE_BASE}/${asset}`, {signal: limit.signal})
-    if (!response.ok || !response.body) {
-      throw new Error(`Could not download yt-dlp (${response.status}). Check your connection and try again.`)
-    }
-
-    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(tmp), {signal: limit.signal})
-    const actual = createHash('sha256').update(await fs.readFile(tmp)).digest('hex')
-    if (!expected || actual !== expected) {
-      throw new Error('The downloaded yt-dlp failed its checksum check and was discarded. Try again.')
-    }
-    await fs.chmod(tmp, 0o755)
-    await fs.rename(tmp, local)
-  } catch (error) {
-    // a cancelled or failed first run must not leave a truncated file behind
-    await fs.rm(tmp, {force: true})
-    if (limit.timedOut) throw new Error('Timed out fetching yt-dlp. Check your connection and try again.')
-    throw error
-  } finally {
-    limit.clear()
-  }
-  return local
-}
-
-// shortcut: one flat ceiling for the whole fetch, so a very slow link (<~80 KB/s)
-// fails; replace with a stall timer like download's if that ever bites
-const FETCH_TIMEOUT_MS = 5 * 60 * 1000
 const PROBE_TIMEOUT_MS = 2 * 60 * 1000
-
-/** An AbortSignal that also fires after `ms`; `timedOut` tells the two causes apart. */
-function withTimeout(ms: number, parent?: AbortSignal) {
-  const controller = new AbortController()
-  let timedOut = false
-  const onParentAbort = () => controller.abort()
-  const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, ms)
-  if (parent?.aborted) controller.abort()
-  else parent?.addEventListener('abort', onParentAbort, {once: true})
-  return {
-    signal: controller.signal,
-    get timedOut() {
-      return timedOut
-    },
-    clear() {
-      clearTimeout(timer)
-      parent?.removeEventListener('abort', onParentAbort)
-    },
-  }
-}
-
-// sites change their players often, so an old yt-dlp stops working; the
-// copy we downloaded is ours to keep fresh (a system install is not)
-const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
-
-// shortcut: two concurrent -U possible if two probes race, serialize if it ever bites
-async function updateIfStale(local: string, onStatus: (message: string) => void): Promise<void> {
-  const {mtimeMs} = await fs.stat(local)
-  if (Date.now() - mtimeMs < STALE_AFTER_MS) return
-  onStatus('updating yt-dlp…')
-  // -U verifies the release checksum and swaps the binary itself, even on Windows
-  if (await commandWorks(local, ['-U'], 60_000)) {
-    const now = new Date()
-    await fs.utimes(local, now, now) // already-latest leaves mtime alone; restart the 7 days
-  }
-}
-
-/**
- * Find ffmpeg for stream merging / mp3 extraction: system install first,
- * ffmpeg-static as fallback. Returns undefined if neither exists — yt-dlp
- * still works for single-file formats without it.
- */
-export async function findFfmpeg(): Promise<string | undefined> {
-  if (await commandWorks('ffmpeg', ['-version'])) return undefined // on PATH, yt-dlp finds it itself
-  try {
-    const mod = await import('ffmpeg-static')
-    const ffmpegPath = (mod.default ?? mod) as unknown as string | null
-    if (ffmpegPath && (await commandWorks(ffmpegPath, ['-version']))) return ffmpegPath
-  } catch {
-    // ffmpeg-static not installed or unsupported platform
-  }
-  return undefined
-}
 
 export type VideoInfo = {
   title: string
@@ -337,7 +192,11 @@ export function isExpiredLinkError(error: unknown): boolean {
 const PROGRESS_PREFIX = 'YOINK|'
 const PROGRESS_TEMPLATE = `${PROGRESS_PREFIX}%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s`
 
+/** Where a run is, which decides how much silence from yt-dlp is normal. */
+export type RunPhase = 'preparing' | 'downloading' | 'processing'
+
 export type ParseState = {
+  phase: RunPhase
   part: number
   /** How many files this run resolves to (video+audio merges are 2). */
   totalParts: number
@@ -349,6 +208,7 @@ export type ParseState = {
 }
 
 export const newParseState = (): ParseState => ({
+  phase: 'preparing',
   part: 0,
   totalParts: 1,
   lastDownloaded: 0,
@@ -368,6 +228,7 @@ export function parseDownloadLine(state: ParseState, rawLine: string): LineEvent
     // the counter dropping means the next file (audio after video) started
     if (downloadedBytes < state.lastDownloaded) state.part++
     state.lastDownloaded = downloadedBytes
+    state.phase = 'downloading'
     return {
       kind: 'progress',
       progress: {
@@ -388,18 +249,31 @@ export function parseDownloadLine(state: ParseState, rawLine: string): LineEvent
     const extracting = /^\[ExtractAudio\] Destination: (.+)$/.exec(line)?.[1]
     const target = merging ?? extracting
     if (target) state.destinations.push(target)
+    state.phase = 'processing'
     return {kind: 'processing'}
   } else if (line.startsWith('[download] Destination: ')) {
     state.destinations.push(line.slice('[download] Destination: '.length))
+    state.phase = 'downloading'
+  } else if (POST_PROCESSOR.test(line)) {
+    // ffmpeg work yt-dlp doesn't narrate; the UI keeps showing the download bar
+    state.phase = 'processing'
   } else if (path.isAbsolute(line)) {
     state.filepath = line
   }
   return undefined
 }
 
-// no output at all for this long while downloading means a dead connection;
-// not applied once processing starts — ffmpeg can be silent for minutes
-const STALL_MS = 90_000
+const POST_PROCESSOR =
+  /^\[(Fixup\w*|Metadata|EmbedSubtitle|EmbedThumbnail|VideoConvertor|VideoRemuxer|ThumbnailsConvertor|SubtitlesConvertor|ModifyChapters|SponsorBlock|SplitChapters|MoveFiles)\]/
+
+// how long yt-dlp may stay silent before we call the run dead: short once
+// bytes should be flowing, longer while it extracts, never while ffmpeg works
+// (post-processing can be silent for minutes)
+const SILENCE_LIMIT_MS: Record<RunPhase, number> = {
+  preparing: 2 * 60 * 1000,
+  downloading: 90_000,
+  processing: Infinity,
+}
 
 let activeChild: ChildProcess | undefined
 process.on('exit', () => activeChild?.kill('SIGTERM'))
@@ -445,11 +319,11 @@ export function download(
     let stderr = ''
     let buffer = ''
     let lastOutput = Date.now()
-    let processing = false
-    let stalled = false
+    let stalledAfterMs = 0
     const watchdog = setInterval(() => {
-      if (!processing && Date.now() - lastOutput > STALL_MS) {
-        stalled = true
+      const limit = SILENCE_LIMIT_MS[state.phase]
+      if (Date.now() - lastOutput > limit) {
+        stalledAfterMs = limit
         child.kill()
       }
     }, 5_000)
@@ -463,10 +337,7 @@ export function download(
       for (const line of lines) {
         const event = parseDownloadLine(state, line)
         if (event?.kind === 'progress') handlers.onProgress(event.progress)
-        else if (event?.kind === 'processing') {
-          processing = true
-          handlers.onProcessing()
-        }
+        else if (event?.kind === 'processing') handlers.onProcessing()
       }
     })
     child.stderr!.on('data', (chunk: string) => {
@@ -486,9 +357,9 @@ export function download(
         reject(new Error('Download cancelled.'))
         return
       }
-      if (stalled) {
+      if (stalledAfterMs) {
         // .part files stay: yt-dlp resumes from them on the next try
-        reject(new Error(`Download stalled — no data for ${STALL_MS / 1000} s. Check your connection and try again.`))
+        reject(new Error(`Download stalled — no data for ${stalledAfterMs / 1000} s. Check your connection and try again.`))
         return
       }
       if (code === 0 && state.filepath) {
