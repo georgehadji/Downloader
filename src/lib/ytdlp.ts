@@ -48,6 +48,16 @@ function spawnYtDlp(ytdlp: string, args: string[], signal?: AbortSignal): ChildP
   const child = spawn(ytdlp, ['--encoding', 'utf-8', ...args], {signal})
   child.stdout?.setEncoding('utf8')
   child.stderr?.setEncoding('utf8')
+  if (process.platform === 'win32' && child.pid) {
+    // the standalone yt-dlp.exe is a launcher with the real yt-dlp as its child; killing
+    // only the launcher leaves that child holding our pipes, so 'close' never fires
+    const pid = String(child.pid)
+    const killLauncher = child.kill.bind(child)
+    child.kill = () => {
+      spawn('taskkill', ['/pid', pid, '/T', '/F'], {stdio: 'ignore'}).on('error', () => killLauncher())
+      return true
+    }
+  }
   return child
 }
 
@@ -324,7 +334,7 @@ export function download(
     let stalledAfterMs = 0
     const watchdog = setInterval(() => {
       const limit = state.phase === 'downloading' && opts.silenceLimitMs ? opts.silenceLimitMs : SILENCE_LIMIT_MS[state.phase]
-      if (Date.now() - lastOutput > limit) {
+      if (!stalledAfterMs && Date.now() - lastOutput > limit) {
         stalledAfterMs = limit
         child.kill()
       }
@@ -350,7 +360,8 @@ export function download(
     child.on('error', error => {
       clearInterval(watchdog)
       activeChildren.delete(child)
-      reject(error)
+      // spawn's abort signal reports as an AbortError; say what actually happened
+      reject(signal?.aborted ? new Error('Download cancelled.') : error)
     })
     child.on('close', code => {
       clearInterval(watchdog)
@@ -358,7 +369,8 @@ export function download(
       debug(`download exit ${code}\n${stderr}`)
       if (signal?.aborted) {
         // cancelled on purpose — don't leave half-written files behind
-        void removePartials(state.destinations)
+        // a playlist run has finished videos among its destinations — those stay
+        void removePartials(state.destinations.filter(file => !state.filepaths.includes(file)))
         reject(new Error('Download cancelled.'))
         return
       }
@@ -382,7 +394,8 @@ function removePartials(destinations: string[]): Promise<unknown> {
   return Promise.allSettled(
     destinations
       .flatMap(dest => [dest, `${dest}.part`, `${dest}.ytdl`])
-      .map(file => fs.rm(file, {force: true})),
+      // ffmpeg may still hold the file for a moment after a cancel; retry on EBUSY/EPERM
+      .map(file => fs.rm(file, {force: true, maxRetries: 5, retryDelay: 100})),
   )
 }
 

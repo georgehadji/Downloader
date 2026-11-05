@@ -26,7 +26,9 @@ fs.writeFileSync(
 
 // download() spawns through the module binding, so swap it before importing
 const realSpawn = cp.spawn
-cp.spawn = ((_cmd: string, _args: string[], opts: never) => realSpawn(process.execPath, [fake], opts)) as typeof cp.spawn
+// taskkill (how spawnYtDlp ends a child on Windows) must reach the real command, or it would start another fake
+cp.spawn = ((cmd: string, args: string[], opts: never) =>
+  cmd === 'taskkill' ? realSpawn(cmd, args, opts) : realSpawn(process.execPath, [fake], opts)) as typeof cp.spawn
 syncBuiltinESMExports()
 const {download} = await import('./ytdlp.js')
 

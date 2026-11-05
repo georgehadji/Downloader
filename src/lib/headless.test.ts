@@ -18,7 +18,8 @@ fs.writeFileSync(
 
 const calls: string[][] = []
 const realSpawn = cp.spawn
-cp.spawn = ((_cmd: string, args: string[], opts: never) => {
+cp.spawn = ((cmd: string, args: string[], opts: never) => {
+  if (cmd === 'taskkill') return realSpawn(cmd, args, opts)
   calls.push(args)
   return realSpawn(process.execPath, [fake], opts)
 }) as typeof cp.spawn
