@@ -6,6 +6,22 @@ Missing HIGH-VALUE inputs: ADRs [UNKNOWN — ADRs not provided]; architecture do
 
 ---
 
+## Status update (after commits 5de3672 and 1a5a8a5, CI green)
+
+Written after the audit below. Line numbers and "never run" claims in the sections below predate this update; this block wins on conflict.
+
+| ID | Now | Evidence |
+|---|---|---|
+| A-02 | CLOSED | `ytdlp.ts` 395 lines (was 524); provisioning in `provision.ts` (130), `withTimeout` in `timeout.ts` (22) |
+| A-09 | PARTLY CLOSED | `withTimeout` tested with fake timers (`timeout.test.ts`); `checksumFor` in `provision.test.ts`; 17 tests total. `spawn`/`fetch` still not injectable; `probe`, `download`, `ensureYtDlp` untested |
+| A-10 | CLOSED | CI run 42110813785 green on {ubuntu, windows} × {Node 22, lts/*} |
+| A-11 | CLOSED | CI found `ink@7.1.0` needs Node ≥22; `engines`, `tsup` target, README and CI matrix now say 22 |
+| A-14 | CLOSED, behavior [HYPOTHESIS] | `SILENCE_LIMIT_MS` `ytdlp.ts:272` per phase (`preparing` 2 min, `downloading` 90 s, `processing` none); not exercised against a real dead connection |
+
+Still open: A-01, A-03, A-04, A-05, A-06, A-13, A-15, D-04. Still unexercised: stall watchdog on a dead connection, tampered-checksum rejection, the 7-day `-U` update.
+
+---
+
 ## Delta since the previous audit
 
 The previous audit's rubric was misapplied in two dimensions (see Phase 6), so its 7/10 and this audit's 8/10 are not a like-for-like comparison.
