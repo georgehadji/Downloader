@@ -23,5 +23,7 @@ test('withTimeout follows the parent abort without calling it a timeout, and cle
   assert.equal(limit.signal.aborted, true)
   assert.equal(limit.timedOut, false)
   limit.clear()
-  assert.equal(withTimeout(60_000, AbortSignal.abort()).signal.aborted, true)
+  const alreadyAborted = withTimeout(60_000, AbortSignal.abort())
+  assert.equal(alreadyAborted.signal.aborted, true)
+  alreadyAborted.clear() // else its 60 s timer keeps the test process alive
 })

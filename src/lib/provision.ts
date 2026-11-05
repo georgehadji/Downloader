@@ -8,7 +8,8 @@ import {Readable} from 'node:stream'
 import {pipeline} from 'node:stream/promises'
 import {withTimeout} from './timeout.js'
 
-const YOINKS_DIR = path.join(os.homedir(), '.yoinks', 'bin')
+// env override exists so tests can install into a temp dir instead of the real home
+const YOINKS_DIR = process.env.YOINKS_BIN_DIR ?? path.join(os.homedir(), '.yoinks', 'bin')
 const RELEASE_BASE = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
 
 function ytDlpAssetName(): string {

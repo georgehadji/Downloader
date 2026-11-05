@@ -287,6 +287,8 @@ export function download(
     infoJsonPath?: string
     choice: DownloadChoice
     outDir: string
+    /** Test seam: replaces the 90 s silence limit of the downloading phase. */
+    silenceLimitMs?: number
   },
   handlers: DownloadHandlers,
   signal?: AbortSignal,
@@ -321,12 +323,12 @@ export function download(
     let lastOutput = Date.now()
     let stalledAfterMs = 0
     const watchdog = setInterval(() => {
-      const limit = SILENCE_LIMIT_MS[state.phase]
+      const limit = state.phase === 'downloading' && opts.silenceLimitMs ? opts.silenceLimitMs : SILENCE_LIMIT_MS[state.phase]
       if (Date.now() - lastOutput > limit) {
         stalledAfterMs = limit
         child.kill()
       }
-    }, 5_000)
+    }, opts.silenceLimitMs ? Math.max(20, opts.silenceLimitMs / 4) : 5_000)
     watchdog.unref()
 
     child.stdout!.on('data', (chunk: string) => {
