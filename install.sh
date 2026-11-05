@@ -36,8 +36,10 @@ npm ci --silent
 npm run build --silent
 
 mkdir -p "$BIN"
-chmod +x "$DIR/dist/cli.js"
-ln -sf "$DIR/dist/cli.js" "$BIN/yoinks"
+# a wrapper, not a symlink: the bundle resolves node_modules next to itself,
+# and some shells (Git Bash) turn `ln -s` into a plain copy
+printf '#!/bin/sh\nexec node "%s" "$@"\n' "$DIR/dist/cli.js" >"$BIN/yoinks"
+chmod +x "$BIN/yoinks"
 echo "installed: $BIN/yoinks"
 
 case ":$PATH:" in
