@@ -12,11 +12,15 @@ import {withTimeout} from './timeout.js'
 const YOINKS_DIR = process.env.YOINKS_BIN_DIR ?? path.join(os.homedir(), '.yoinks', 'bin')
 const RELEASE_BASE = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
 
-function ytDlpAssetName(): string {
+/** The standalone release binary for this machine, or undefined when the release has none (e.g. 32-bit ARM ships only a zip). */
+function ytDlpAssetName(): string | undefined {
   if (process.platform === 'win32') return 'yt-dlp.exe'
   if (process.platform === 'darwin') return 'yt-dlp_macos'
-  return process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux'
+  if (process.arch === 'arm64') return 'yt-dlp_linux_aarch64'
+  return process.arch === 'x64' ? 'yt-dlp_linux' : undefined
 }
+
+const INSTALL_YOURSELF = 'Install yt-dlp yourself (for example: pip install yt-dlp) and try again.'
 
 // async on purpose: a spawnSync here blocks the event loop, which freezes
 // ink mid-frame — the user hits enter and sees nothing until it returns
@@ -56,10 +60,12 @@ export async function ensureYtDlp(onStatus: (message: string) => void, signal?: 
     return local
   }
 
+  const asset = ytDlpAssetName()
+  if (!asset) throw new Error(`yt-dlp has no download for this system (${process.platform}/${process.arch}). ${INSTALL_YOURSELF}`)
+
   onStatus('first run: fetching yt-dlp…')
   await fs.mkdir(YOINKS_DIR, {recursive: true})
 
-  const asset = ytDlpAssetName()
   const tmp = `${local}.download`
   const limit = withTimeout(FETCH_TIMEOUT_MS, signal)
   try {
@@ -81,6 +87,10 @@ export async function ensureYtDlp(onStatus: (message: string) => void, signal?: 
       throw new Error('The downloaded yt-dlp failed its checksum check and was discarded. Try again.')
     }
     await fs.chmod(tmp, 0o755)
+    // a binary this system can't run (musl, wrong arch) would otherwise be re-downloaded on every launch
+    if (!(await commandWorks(tmp, ['--version']))) {
+      throw new Error(`The downloaded yt-dlp can’t run on this system. ${INSTALL_YOURSELF}`)
+    }
     await fs.rename(tmp, local)
   } catch (error) {
     // a cancelled or failed first run must not leave a truncated file behind
@@ -100,6 +110,7 @@ const FETCH_TIMEOUT_MS = 5 * 60 * 1000
 // sites change their players often, so an old yt-dlp stops working; the
 // copy we downloaded is ours to keep fresh (a system install is not)
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
+const RETRY_AFTER_MS = 24 * 60 * 60 * 1000
 
 // shortcut: two concurrent -U possible if two probes race, serialize if it ever bites
 async function updateIfStale(local: string, onStatus: (message: string) => void): Promise<void> {
@@ -107,10 +118,11 @@ async function updateIfStale(local: string, onStatus: (message: string) => void)
   if (Date.now() - mtimeMs < STALE_AFTER_MS) return
   onStatus('updating yt-dlp…')
   // -U verifies the release checksum and swaps the binary itself, even on Windows
-  if (await commandWorks(local, ['-U'], 60_000)) {
-    const now = new Date()
-    await fs.utimes(local, now, now) // already-latest leaves mtime alone; restart the 7 days
-  }
+  const updated = await commandWorks(local, ['-U'], 60_000)
+  // already-latest leaves mtime alone, so restart the 7 days; a failed update (offline,
+  // rate-limited) retries in a day instead of making every launch wait on it
+  const stamp = updated ? new Date() : new Date(Date.now() - STALE_AFTER_MS + RETRY_AFTER_MS)
+  await fs.utimes(local, stamp, stamp)
 }
 
 /**

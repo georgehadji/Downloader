@@ -45,11 +45,16 @@ test('a fresh copy is left alone', async () => {
   assert.equal(updates(), 1) // still just the one from before
 })
 
-test('a failed update keeps the old age so the next run tries again', async () => {
+test('a failed update retries in a day, not on every launch', async () => {
   ageDays(10)
   updateExitCode = 1
   assert.equal(await ensureYtDlp(() => {}), local) // a failed update must not break the run
   assert.equal(updates(), 2)
-  assert.ok(Date.now() - fs.statSync(local).mtimeMs > 9 * 24 * 60 * 60 * 1000)
+  const ageMs = Date.now() - fs.statSync(local).mtimeMs
+  const day = 24 * 60 * 60 * 1000
+  // about 6 days old (timestamp rounding makes the edge fuzzy): not stale yet, stale again in a day
+  assert.ok(ageMs > 5.9 * day && ageMs < 7 * day, `age was ${ageMs / day} days`)
+  await ensureYtDlp(() => {})
+  assert.equal(updates(), 2) // the next launch skips the update
   fs.rmSync(binDir, {recursive: true, force: true})
 })
