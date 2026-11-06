@@ -1,1 +1,3 @@
 *.sh text eol=lf
+# signed bytes: any line-ending conversion breaks the signature
+src/lib/fixtures/* -text
