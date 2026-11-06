@@ -62,7 +62,8 @@ const outDir = path.resolve(args.outDir ?? path.join(os.homedir(), 'Downloads'))
 if (args.best || args.mp3) {
   // scriptable mode: stdout carries only the saved paths, everything else goes to stderr
   const controller = new AbortController()
-  process.once('SIGINT', () => controller.abort())
+  // TERM/HUP end Node without running 'exit' handlers; abort instead so partials are removed
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(signal, () => controller.abort())
   const showProgress = Boolean(process.stderr.isTTY)
   try {
     const ytdlp = await ensureYtDlp(message => console.error(message), controller.signal)
@@ -113,6 +114,10 @@ if (isTTY) {
       console.error(error)
       process.exit(1)
     })
+  }
+  // the default action for these skips the exit handlers, leaving the terminal in the alt screen
+  for (const signal of ['SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => process.exit(128 + os.constants.signals[signal])) // 143 / 129
   }
 }
 

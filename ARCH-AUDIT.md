@@ -1,5 +1,7 @@
 # yoinks — architecture audit (re-run after fixes)
 
+> The fix plan this audit led to (`FIX-PLAN.md`) shipped in full and was removed; `git show 8e67e62:FIX-PLAN.md` shows it.
+
 Config: MODE=AGENTIC-REPO · PROJECT_STAGE=Early Production [INFERRED: published to npm, v0.3.1, 14 unit tests, `prepublishOnly` gate, CI workflow present but never executed] · TEAM_SIZE=UNKNOWN (not a git checkout, no CODEOWNERS; `package.json` names one author, so solo is a [HYPOTHESIS]) · SCOPE=`src/**` non-test code + `package.json`, `tsconfig.json`, `tsup.config.ts`, `.github/workflows/ci.yml`, `README.md` · AUDIT_BUDGET=40 files / 15k LOC, used 24 files / ~2.2k LOC.
 
 Missing HIGH-VALUE inputs: ADRs [UNKNOWN — ADRs not provided]; architecture doc [UNKNOWN — none; README "How it works" is the only design text]; deployment manifests [N/A — npm CLI]; CI run history [UNKNOWN — the workflow in `.github/workflows/ci.yml` has never run, the folder is not a git checkout].

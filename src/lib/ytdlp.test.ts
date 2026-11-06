@@ -3,7 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import {
+  BEST_CHOICE,
   buildChoices,
+  cleanYtDlpError,
+  downloadArgs,
   isExpiredLinkError,
   newParseState,
   parseDownloadLine,
@@ -106,4 +109,16 @@ test('parseDownloadLine tracks the run phase so silence limits fit what yt-dlp i
   assert.equal(state.phase, 'downloading')
   assert.deepEqual(parseDownloadLine(state, '[Merger] Merging formats into "/tmp/a.mp4"'), {kind: 'processing'})
   assert.equal(state.phase, 'processing')
+})
+
+test('cleanYtDlpError drops terminal escape sequences from website-supplied text', () => {
+  const message = cleanYtDlpError('ERROR: [youtube] abc: bad \x1b]52;c;ZXZpbA==\x07 thing')
+  assert.equal(message, 'abc: bad ]52;c;ZXZpbA== thing')
+  assert.doesNotMatch(message, /[\x1b\x07]/)
+})
+
+test('downloadArgs escapes a literal % in the output folder, not in the template', () => {
+  const args = downloadArgs({ytdlp: 'yt-dlp', url: 'https://x', choice: BEST_CHOICE, outDir: '/x/100%(id)s'})
+  const template = args[args.indexOf('-o') + 1]!
+  assert.ok(template.startsWith(path.join('/x/100%%(id)s', '%(title)')), template)
 })

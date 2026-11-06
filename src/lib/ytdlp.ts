@@ -2,7 +2,7 @@ import {spawn, type ChildProcess} from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {debug} from './debug.js'
-import {formatBytes} from './format.js'
+import {formatBytes, stripControlChars} from './format.js'
 import {saveInfoJson, sweepStaleInfoFiles} from './info-files.js'
 import {withTimeout} from './timeout.js'
 
@@ -286,23 +286,21 @@ process.on('exit', () => {
   for (const child of activeChildren) child.kill('SIGTERM')
 })
 
-export function download(
-  opts: {
-    ytdlp: string
-    ffmpegLocation?: string
-    url: string
-    /** When set, reuse the probe's metadata instead of re-extracting — starts much faster. */
-    infoJsonPath?: string
-    choice: DownloadChoice
-    outDir: string
-    /** Download every video of a playlist link instead of just the one. */
-    playlist?: boolean
-    /** Test seam: replaces the 90 s silence limit of the downloading phase. */
-    silenceLimitMs?: number
-  },
-  handlers: DownloadHandlers,
-  signal?: AbortSignal,
-): Promise<string> {
+export type DownloadOptions = {
+  ytdlp: string
+  ffmpegLocation?: string
+  url: string
+  /** When set, reuse the probe's metadata instead of re-extracting — starts much faster. */
+  infoJsonPath?: string
+  choice: DownloadChoice
+  outDir: string
+  /** Download every video of a playlist link instead of just the one. */
+  playlist?: boolean
+  /** Test seam: replaces the 90 s silence limit of the downloading phase. */
+  silenceLimitMs?: number
+}
+
+export function downloadArgs(opts: DownloadOptions): string[] {
   const args = [
     ...(opts.infoJsonPath ? ['--load-info-json', opts.infoJsonPath] : [opts.url]),
     ...opts.choice.args,
@@ -319,9 +317,15 @@ export function download(
     'after_move:filepath',
     '--no-simulate',
     '-o',
-    path.join(opts.outDir, OUTPUT_TEMPLATE),
+    // a literal % in the folder name must not start a template field (%% is a literal %)
+    path.join(opts.outDir.replaceAll('%', '%%'), OUTPUT_TEMPLATE),
   ]
   if (opts.ffmpegLocation) args.push('--ffmpeg-location', opts.ffmpegLocation)
+  return args
+}
+
+export function download(opts: DownloadOptions, handlers: DownloadHandlers, signal?: AbortSignal): Promise<string> {
+  const args = downloadArgs(opts)
 
   return new Promise((resolve, reject) => {
     const child = spawnYtDlp(opts.ytdlp, args, signal)
@@ -405,11 +409,12 @@ function toNumber(value: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-function cleanYtDlpError(stderr: string): string {
+export function cleanYtDlpError(stderr: string): string {
   const lines = stderr
     .split('\n')
     .map(l => l.trim())
     .filter(l => l.startsWith('ERROR:'))
   const last = lines.at(-1)
-  return last ? last.replace(/^ERROR:\s*(\[[^\]]+\]\s*)?/, '') : ''
+  // the text can carry website-supplied escape sequences; scripted mode prints it raw
+  return last ? stripControlChars(last.replace(/^ERROR:\s*(\[[^\]]+\]\s*)?/, '')) : ''
 }

@@ -26,11 +26,17 @@ export function truncate(text: string, max: number): string {
 }
 
 export function shortenPath(filepath: string, homedir: string, max = 60): string {
-  const pretty = filepath.startsWith(homedir) ? `~${filepath.slice(homedir.length)}` : filepath
+  // "in home" means home itself or a separator right after it: /home/al must not claim /home/alice
+  const next = filepath[homedir.length]
+  const inHome = filepath.startsWith(homedir) && (next === undefined || next === '/' || next === '\\')
+  const pretty = inHome ? `~${filepath.slice(homedir.length)}` : filepath
   if (pretty.length <= max) return pretty
   const ext = /\.\w{1,5}$/.exec(pretty)?.[0] ?? ''
   return `${pretty.slice(0, max - ext.length - 1)}…${ext}`
 }
+
+/** Drop C0/C1 control characters (ESC, BEL, CSI…) so untrusted text can't drive the terminal. */
+export const stripControlChars = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
 /**
  * Word-wrap into left-flush lines. Ink's own wrapping keeps the space at

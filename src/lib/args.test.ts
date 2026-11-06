@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {parseArgs} from './args.js'
-import {isThemeMode, nextThemeMode, themeFor} from '../theme.js'
+import {isThemeMode, nextThemeMode} from '../theme-mode.js'
+import {themeFor} from '../theme.js'
 
 test('parses a url and a spaced theme option without confusing the value for the url', () => {
   assert.deepEqual(parseArgs(['--theme', 'light', 'https://example.com/video']), {

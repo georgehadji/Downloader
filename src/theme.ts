@@ -1,8 +1,8 @@
 import React, {createContext, type ReactNode, useContext} from 'react'
 
-import {THEME_MODES, type ThemeMode} from './theme-mode.js'
+import type {ThemeMode} from './theme-mode.js'
 
-export {isThemeMode, nextThemeMode, THEME_MODES, type ThemeMode} from './theme-mode.js'
+export {nextThemeMode, type ThemeMode} from './theme-mode.js'
 
 export type Theme = {
   mode: ThemeMode
