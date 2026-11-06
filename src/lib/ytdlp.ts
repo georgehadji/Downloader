@@ -394,6 +394,21 @@ export function download(opts: DownloadOptions, handlers: DownloadHandlers, sign
   })
 }
 
+/** Download from the probe's cached info; if its media links have expired (403/410), extract fresh once. */
+export async function downloadWithRefresh(
+  opts: DownloadOptions,
+  handlers: DownloadHandlers & {onRefresh?: () => void},
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    return await download(opts, handlers, signal)
+  } catch (error) {
+    if (signal?.aborted || !opts.infoJsonPath || !isExpiredLinkError(error)) throw error
+    handlers.onRefresh?.()
+    return download({...opts, infoJsonPath: undefined}, handlers, signal)
+  }
+}
+
 function removePartials(destinations: string[]): Promise<unknown> {
   return Promise.allSettled(
     destinations

@@ -17,3 +17,5 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - run: shellcheck install.sh # preinstalled on GitHub's ubuntu runners
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22

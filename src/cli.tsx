@@ -6,8 +6,7 @@ import {render} from 'ink'
 import {App, type Outcome} from './app.js'
 import {captureFrames} from './lib/click-map.js'
 import {parseArgs} from './lib/args.js'
-import {formatProgress, yoinkHeadless} from './lib/headless.js'
-import {ensureYtDlp, findFfmpeg} from './lib/provision.js'
+import {runHeadless} from './lib/headless.js'
 
 // read at runtime from the shipped package.json so npm version bumps
 // can't drift from a hardcoded constant
@@ -64,33 +63,10 @@ if (args.best || args.mp3) {
   const controller = new AbortController()
   // TERM/HUP end Node without running 'exit' handlers; abort instead so partials are removed
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(signal, () => controller.abort())
-  const showProgress = Boolean(process.stderr.isTTY)
-  try {
-    const ytdlp = await ensureYtDlp(message => console.error(message), controller.signal)
-    const report = await yoinkHeadless(
-      {
-        ytdlp,
-        ffmpegLocation: await findFfmpeg(),
-        url: args.initialUrl!,
-        audio: Boolean(args.mp3),
-        playlist: Boolean(args.playlist),
-        outDir,
-      },
-      progress => showProgress && process.stderr.write(`\r\x1b[K${formatProgress(progress)}`),
-      controller.signal,
-    )
-    if (showProgress) process.stderr.write('\r\x1b[K')
-    for (const file of report.files) console.log(file)
-    if (report.warning) {
-      console.error(`yoinks: ${report.warning}`)
-      process.exit(1)
-    }
-    process.exit(0)
-  } catch (error) {
-    if (showProgress) process.stderr.write('\r\x1b[K')
-    console.error(`yoinks: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
-  }
+  const io = {out: (line: string) => console.log(line), err: (text: string) => process.stderr.write(text), isTTY: Boolean(process.stderr.isTTY)}
+  process.exit(
+    await runHeadless({url: args.initialUrl!, audio: Boolean(args.mp3), playlist: Boolean(args.playlist), outDir}, io, controller.signal),
+  )
 }
 
 const initialUrl = args.initialUrl

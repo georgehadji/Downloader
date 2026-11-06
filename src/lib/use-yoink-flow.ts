@@ -5,8 +5,7 @@ import {ensureYtDlp, findFfmpeg} from './provision.js'
 import {discardInfoJson} from './info-files.js'
 import {
   buildChoices,
-  download,
-  isExpiredLinkError,
+  downloadWithRefresh,
   probe,
   type DownloadChoice,
   type DownloadProgress,
@@ -142,19 +141,17 @@ export function useYoinkFlow({
       }
       try {
         const ffmpegLocation = await findFfmpeg()
-        const base = {ytdlp: ytdlpRef.current, ffmpegLocation, url, choice, outDir}
-        let filepath: string
-        try {
-          // reuse the probe's metadata — starts immediately instead of re-extracting
-          filepath = await download({...base, infoJsonPath: infoJsonRef.current}, handlers, controller.signal)
-        } catch (error) {
-          if (controller.signal.aborted || !infoJsonRef.current || !isExpiredLinkError(error)) throw error
-          // media urls in the cached info can expire — retry with a fresh extraction
-          setPhase(prev =>
-            prev.name === 'downloading' ? {...prev, progress: undefined, refreshing: true} : prev,
-          )
-          filepath = await download(base, handlers, controller.signal)
-        }
+        // reuse the probe's metadata — starts immediately instead of re-extracting
+        const filepath = await downloadWithRefresh(
+          {ytdlp: ytdlpRef.current, ffmpegLocation, url, choice, outDir, infoJsonPath: infoJsonRef.current},
+          {
+            ...handlers,
+            // media urls in the cached info can expire — the retry re-extracts
+            onRefresh: () =>
+              setPhase(prev => (prev.name === 'downloading' ? {...prev, progress: undefined, refreshing: true} : prev)),
+          },
+          controller.signal,
+        )
         onOutcome({filepath})
         setHistory(addToHistory(url))
         setPhase({name: 'done', filepath})

@@ -1,4 +1,5 @@
 import {formatSpeed} from './format.js'
+import {ensureYtDlp, findFfmpeg} from './provision.js'
 import {BEST_CHOICE, download, MP3_CHOICE, type DownloadProgress} from './ytdlp.js'
 
 export type HeadlessOptions = {
@@ -52,4 +53,40 @@ export async function yoinkHeadless(
   )
   if (files.length === 0) files.push(last)
   return {files, warning}
+}
+
+export type HeadlessIo = {
+  /** One saved file path per call — the only thing that goes to stdout. */
+  out: (line: string) => void
+  /** Raw text for stderr: status lines, progress, errors. */
+  err: (text: string) => void
+  /** Whether stderr is a terminal, which decides if progress is drawn. */
+  isTTY: boolean
+}
+
+/** The whole scriptable run: provision, download, report. Returns the exit code instead of exiting. */
+export async function runHeadless(
+  request: Omit<HeadlessOptions, 'ytdlp' | 'ffmpegLocation'>,
+  io: HeadlessIo,
+  signal: AbortSignal,
+): Promise<number> {
+  try {
+    const ytdlp = await ensureYtDlp(message => io.err(`${message}\n`), signal)
+    const report = await yoinkHeadless(
+      {...request, ytdlp, ffmpegLocation: await findFfmpeg()},
+      progress => io.isTTY && io.err(`\r\x1b[K${formatProgress(progress)}`),
+      signal,
+    )
+    if (io.isTTY) io.err('\r\x1b[K')
+    for (const file of report.files) io.out(file)
+    if (report.warning) {
+      io.err(`yoinks: ${report.warning}\n`)
+      return 1
+    }
+    return 0
+  } catch (error) {
+    if (io.isTTY) io.err('\r\x1b[K')
+    io.err(`yoinks: ${error instanceof Error ? error.message : String(error)}\n`)
+    return 1
+  }
 }
