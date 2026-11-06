@@ -94,6 +94,9 @@ export function useYoinkFlow({
     if (initialUrl) void startProbe(initialUrl)
   }, [initialUrl, startProbe])
 
+  // quitting mid-run cancels it, so yt-dlp stops and its partials are removed instead of finishing after the UI is gone
+  useEffect(() => () => abortRef.current?.abort(), [])
+
   // every way back to the input screen passes through here, so this is the
   // one place the probe's info file gets released
   const resetToInput = useCallback(() => {
